@@ -62,6 +62,10 @@ After deploying that corrected image, the remaining opening completed:
   opening fraction 0.996135 and torque -0.968 Nm at completion.
 - The motor remains targeted at the saved -0.1597 rev open endpoint.
 
+The following idle read confirmed -0.159683 rev (99.9967% opening), fault 0,
+and stationary feedback. Docker measured 28.08 MiB RAM and 6.48% of one CPU
+core in a single idle sample on the NUC at 50 Hz.
+
 This validates real telemetry, one closing motion and the corrected opening.
 It is not a long-duration endurance qualification or physical load-cell
 calibration. The full suite covers partial moves, cancellation and faults in
@@ -71,8 +75,11 @@ simulation; those were not additionally exercised on hardware in this one cycle.
 
 Local final tested runtime config digest before registry publication:
 `sha256:db01373bca0fc2af9e00a3539325d5bc32e8863ff85f262f6911175a2fa19b4e`.
-Docker reports approximately 152 MB for the local image, with approximately
-2.2 MB installed connector payload. No compiler is present in the runtime.
+The local Docker containerd store reports approximately 152 MB of compressed
+image content and `docker images` reports 706 MB of combined local storage;
+these are different size measurements, not a 152 MB unpacked filesystem.
+The installed connector payload is approximately 2.2 MB. No compiler is present
+in the runtime.
 Registry rebuild digests can differ; use the published immutable SHA tag/digest
 when pinning deployments. CI runs the same tests before publishing.
 
