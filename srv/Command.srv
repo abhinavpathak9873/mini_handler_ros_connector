@@ -1,0 +1,16 @@
+# open, close, opening, relative, width, relative_mm, grip_torque, grip_force
+# opening/relative use fractions; width/relative_mm use mm; grip_* use Nm/N.
+string operation
+float64 value
+# 0 selects the configured default; otherwise (0,1].
+float64 speed_scale
+float64 acceleration_scale
+# 0 uses the direction default. grip_* derives its limit from value.
+float64 torque_limit_nm
+# 0 selects the configured timeout.
+float64 timeout_s
+---
+# Acceptance is not completion. See results or get_result.
+bool accepted
+string command_id
+string message

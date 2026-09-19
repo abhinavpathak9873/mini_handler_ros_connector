@@ -1,0 +1,15 @@
+cmake_minimum_required(VERSION 3.8)
+project(mini_handler_ros_connector)
+find_package(ament_cmake REQUIRED)
+find_package(ament_cmake_python REQUIRED)
+find_package(rosidl_default_generators REQUIRED)
+find_package(std_msgs REQUIRED)
+rosidl_generate_interfaces(${PROJECT_NAME}
+  "msg/State.msg" "msg/Result.msg" "srv/Command.srv" "srv/GetResult.srv"
+  DEPENDENCIES std_msgs)
+ament_python_install_package(mini_handler)
+install(PROGRAMS scripts/connector scripts/mini-handler DESTINATION lib/${PROJECT_NAME})
+install(PROGRAMS scripts/mini-handler DESTINATION bin)
+install(DIRECTORY config DESTINATION share/${PROJECT_NAME})
+ament_export_dependencies(rosidl_default_runtime)
+ament_package()

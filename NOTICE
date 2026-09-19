@@ -1,0 +1,7 @@
+The CAN-FD register layout and fdcanusb adapter setup were derived from the
+operator-supplied mini-handler ht_motor.py and its working integration in
+abhinavpathak9873/dff_mobile_manipulation_docker (September 2026).
+
+This standalone implementation has no runtime dependency on that repository.
+HighTorque, mjbots, ROS, and Docker are names of their respective projects or
+vendors; this project does not claim manufacturer certification or endorsement.

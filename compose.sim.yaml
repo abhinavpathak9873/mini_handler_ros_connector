@@ -1,0 +1,10 @@
+services:
+  gripper:
+    image: ghcr.io/abhinavpathak9873/mini_handler_ros_connector:latest
+    build: .
+    network_mode: host
+    init: true
+    environment:
+      ROS_DOMAIN_ID: "${ROS_DOMAIN_ID:-0}"
+    command: [/opt/mini_handler/lib/mini_handler_ros_connector/connector, --ros-args, -p, "simulate:=true"]
+    stop_grace_period: 8s

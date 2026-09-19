@@ -1,0 +1,14 @@
+services:
+  gripper:
+    image: ghcr.io/abhinavpathak9873/mini_handler_ros_connector:latest
+    build: .
+    network_mode: host
+    init: true
+    restart: "no"
+    stop_grace_period: 8s
+    devices:
+      - "${SERIAL_PORT:-/dev/ttyACM0}:/dev/mini_handler"
+    environment:
+      ROS_DOMAIN_ID: "${ROS_DOMAIN_ID:-0}"
+    volumes:
+      - ./config/gripper.yaml:/opt/mini_handler/share/mini_handler_ros_connector/config/gripper.yaml:ro
