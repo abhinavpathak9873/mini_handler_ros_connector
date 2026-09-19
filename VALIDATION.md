@@ -83,6 +83,32 @@ in the runtime.
 Registry rebuild digests can differ; use the published immutable SHA tag/digest
 when pinning deployments. CI runs the same tests before publishing.
 
+## Published release and clean deployment
+
+[GitHub Actions run 35458188194](https://github.com/abhinavpathak9873/mini_handler_ros_connector/actions/runs/35458188194)
+passed all 47 tests and ROS integration, then published the public image:
+
+`ghcr.io/abhinavpathak9873/mini_handler_ros_connector:sha-c8a4534`
+
+The same image is tagged `latest`. Published OCI index digest:
+`sha256:7233e591ef492f6b91885fe35d34f45c2b63ece28353774fd22ad0731dca0ca0`.
+
+An anonymous pull with an empty Docker authentication configuration succeeded.
+A fresh simulator container from the published image accepted an 80% opening
+command with 50% speed/acceleration, reached it in 0.986 s, and stopped cleanly.
+
+On the Picker NUC, the local test container was gracefully stopped and replaced
+by the published image using the repository's production Compose file and
+the adapter's stable `/dev/serial/by-id` path. Its digest matched the registry
+digest above. Read-only feedback confirmed connected, not simulated, not busy,
+fault 0, position -0.159698 rev (99.9997% configured opening), approximately
+23.94 V, and a 1.68 ms serial round trip. No additional motion was requested.
+The existing mobile-manipulation container remained healthy and running.
+
+This standalone deployment currently owns the serial port, on ROS domain 0.
+Stop it before using the original gripper driver; this release does not silently
+rewire the tray stack to a new gripper interface.
+
 ## Remaining limits
 
 - The 55–105 mm scale is nominal; mm commands are disabled by default.
