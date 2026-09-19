@@ -15,8 +15,28 @@ motion-inhibit recovery, retained failed-command results, no command replay,
 and contact-versus-reference classification. The image build also tests actual
 ROS connection messages and rejected commands with a nonexistent device path.
 The boot Compose file passes configuration validation and the user service
-passes systemd unit verification. Deployment/restart results are recorded below
-after checking the published image.
+passes systemd unit verification.
+
+[CI run 35458996280](https://github.com/abhinavpathak9873/mini_handler_ros_connector/actions/runs/35458996280)
+passed all 51 tests, ROS integration and the absent-device ROS test, then
+published `:sha-6086f8d` and `:latest` with OCI index digest
+`sha256:502786cec61efd7f17760c54073d964d7557998bd50ab8d8e4a2f69f0696ca8b`.
+The local build used the preceding public image as its base after Docker Hub
+rate limiting; the published CI build used the normal ROS Humble base.
+A separate runtime check with the boot-style device mount and missing adapter
+reported `connected=false`, `ready=false`, and the missing path, without exiting.
+
+Picker pulled the published digest and now runs the boot Compose deployment
+under the enabled user `mini-handler.service`, with `Linger=yes`, Docker enabled
+at boot, ROS domain 0, and the existing adapter's stable by-id identity. The
+connection topic reported `ready`, fresh feedback, and no recovery latch.
+A controlled service restart succeeded (`active/running`, zero failure restarts).
+After restart the real gripper remained at -0.159698 rev (99.9995% open),
+fault 0, not busy, approximately 23.96 V, with a 1.52 ms serial round trip.
+The mobile-manipulation container remained healthy; no arm/gripper motion was
+commanded. No machine reboot, physical cable removal/reinsertion, or new physical
+closing trial was performed. Disconnect/reconnect failure paths were tested
+with the injected transport and absent-device ROS tests, not a hardware unplug.
 
 The following sections preserve the **initial release's** measurements and
 old endpoint values; they are not new physical measurements for this update.
