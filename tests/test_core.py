@@ -33,7 +33,8 @@ def result(driver, identifier):
 def test_full_cycle_and_relative_opening(rig):
     d, m = rig
     close = result(d, d.submit('close'))
-    assert close['outcome'] == 'reached'
+    assert close['outcome'] == 'closed'
+    assert close['at_closed_reference']
     assert close['opening_fraction'] == pytest.approx(0, abs=.004)
     partial = result(d, d.submit('relative', .5))
     assert partial['opening_fraction'] == pytest.approx(.5, abs=.005)
@@ -146,7 +147,7 @@ def test_shutdown_cancels_and_holds(rig):
     assert not d.thread.is_alive()
 
 
-@pytest.mark.parametrize('kwargs', [dict(open_position_rev=.35), dict(max_torque_nm=1),
+@pytest.mark.parametrize('kwargs', [dict(open_position_rev=.132523), dict(max_torque_nm=1),
     dict(poll_hz=0), dict(force_n_per_nm=-1), dict(default_speed_scale=2),
     dict(max_speed_rps=math.nan), dict(position_tolerance_rev=.4)])
 def test_bad_config_fails(kwargs):
@@ -206,3 +207,78 @@ def test_opening_unloads_existing_clamp_without_false_blocked_result(rig):
         return sample
     m.exchange = delayed_release
     assert result(d, d.submit('open'))['outcome'] == 'reached'
+
+
+def test_object_contact_does_not_change_empty_reference(rig):
+    d, m = rig
+    reference = d.config.close_position_rev
+    m.c = replace(m.c, simulated_contact_fraction=.6)
+    r = result(d, d.submit('close'))
+    assert r['success'] and r['outcome'] == 'contact'
+    assert not r['at_closed_reference']
+    assert r['opening_fraction'] == pytest.approx(.6)
+    assert d.config.close_position_rev == reference
+
+
+def test_absent_start_then_reconnect_is_read_only_and_loss_requires_recovery():
+    c = Config(reconnect_interval_s=.02, poll_hz=100.)
+    m = SimulatedMotor(c)
+    available = False
+    def factory():
+        if not available:
+            raise OSError('adapter missing')
+        return m
+    d = Controller(c, transport_factory=factory)
+    try:
+        wait_for(lambda: d.error)
+        assert not d.connected and not d.ever_connected
+        with pytest.raises(ValueError):
+            d.submit('close')
+        available = True
+        wait_for(lambda: d.connected and not d.error)
+        assert not m.commands
+        m.disconnected = True
+        wait_for(lambda: d.fault_latched)
+        assert not d.connected
+        m.disconnected = False
+        wait_for(lambda: d.connected)
+        with pytest.raises(ValueError):
+            d.submit('close')
+        assert not m.commands
+        d.recover()
+        assert not d.error and not d.fault_latched
+        assert not m.commands
+    finally:
+        d.close()
+
+
+def test_reconnect_preserves_failed_result_and_never_replays():
+    c = Config(reconnect_interval_s=.02, poll_hz=100.)
+    m = SimulatedMotor(c)
+    d = Controller(c, transport_factory=lambda: m)
+    try:
+        wait_for(lambda: d.connected)
+        ident = d.submit('close', speed_scale=.01)
+        wait_for(lambda: m.commands)
+        m.disconnected = True
+        assert result(d, ident)['outcome'] == 'communication_error'
+        count = len(m.commands)
+        m.disconnected = False
+        wait_for(lambda: d.connected)
+        assert d.fault_latched and len(m.commands) == count
+        assert d.get_result(ident)[2]['outcome'] == 'communication_error'
+    finally:
+        d.close()
+
+
+def test_recover_rejects_fault_and_moving_motor(rig):
+    d, m = rig
+    with d.lock:
+        d.sample.fault = 38
+        with pytest.raises(RuntimeError):
+            d.recover()
+        d.sample.fault = 0
+        d.sample.velocity = 1.
+        with pytest.raises(ValueError):
+            d.recover()
+        d.sample.velocity = 0.

@@ -7,10 +7,10 @@ import rclpy
 from rclpy.node import Node
 from rclpy.signals import SignalHandlerOptions
 from rcl_interfaces.msg import ParameterDescriptor
-from rclpy.qos import QoSProfile, ReliabilityPolicy
+from rclpy.qos import QoSProfile, ReliabilityPolicy, DurabilityPolicy
 from std_srvs.srv import Trigger
 from sensor_msgs.msg import JointState
-from mini_handler_ros_connector.msg import State, Result
+from mini_handler_ros_connector.msg import State, Result, Connection
 from mini_handler_ros_connector.srv import Command, GetResult
 
 from .controller import Config, Controller
@@ -30,14 +30,18 @@ class Connector(Node):
             depth=1, reliability=ReliabilityPolicy.BEST_EFFORT))
         self.joint_pub = self.create_publisher(JointState, 'joint_states', 1)
         self.result_pub = self.create_publisher(Result, 'results', 32)
-        transport = (SimulatedMotor(self.c) if self.c.simulate else SerialMotor(
+        self.connection_pub = self.create_publisher(Connection, 'connection', QoSProfile(
+            depth=1, reliability=ReliabilityPolicy.RELIABLE, durability=DurabilityPolicy.TRANSIENT_LOCAL))
+        factory = lambda: (SimulatedMotor(self.c) if self.c.simulate else SerialMotor(
             self.c.port, self.c.motor_id, self.c.request_timeout_s, self.c.extended_telemetry))
-        self.controller = Controller(self.c, transport, self.publish_result)
+        self.controller = Controller(self.c, on_result=self.publish_result, transport_factory=factory)
         self.create_service(Command, 'command', self.command)
         self.create_service(GetResult, 'get_result', self.get_result)
-        for op in ('open', 'close', 'stop'):
+        for op in ('open', 'close', 'stop', 'recover'):
             self.create_service(Trigger, op, lambda req, res, operation=op: self.trigger(operation, res))
         self.create_timer(1/self.c.poll_hz, self.publish_state)
+        self.create_timer(1.0, self.publish_connection)
+        self.last_connection = None
         self.get_logger().info('SIMULATOR' if self.c.simulate else f'Serial owner: {self.c.port}')
 
     def command(self, req, res):
@@ -51,6 +55,10 @@ class Connector(Node):
 
     def trigger(self, operation, res):
         try:
+            if operation == 'recover':
+                self.controller.recover()
+                res.success, res.message = True, 'motion inhibit cleared; no movement commanded'
+                return res
             identifier = self.controller.stop() if operation == 'stop' else self.controller.submit(operation)
             res.success, res.message = True, identifier
         except (ValueError, RuntimeError) as exc:
@@ -80,15 +88,20 @@ class Connector(Node):
         msg = State()
         msg.header.stamp = self.get_clock().now().to_msg()
         msg.simulated = self.c.simulate
-        msg.connected, msg.busy = connected, plan is not None or self.controller.stop_pending is not None
-        if s and abs(s.velocity) >= self.c.stationary_velocity_rps:
+        age = time.monotonic()-s.received_at if s else math.inf
+        msg.connected = connected and age <= max(.2, 3/self.c.poll_hz)
+        msg.ready = msg.connected and not error and not self.controller.fault_latched
+        msg.at_closed_reference = msg.connected and self.controller.at_closed_reference(s)
+        msg.busy = plan is not None or self.controller.stop_pending is not None
+        if msg.connected and s and abs(s.velocity) >= self.c.stationary_velocity_rps:
             msg.busy = True
         msg.phase, msg.detail = phase, error
         msg.command_id = plan.command_id if plan else ''
-        msg.sample_age_s = time.monotonic()-s.received_at if s else math.inf
+        msg.sample_age_s = age
         msg.width_calibrated = self.c.width_calibrated
         msg.force_calibrated = self.c.force_n_per_nm > 0
-        msg.last_transport_rtt_ms = self.controller.transport.rtt_ms
+        transport = self.controller.transport
+        msg.last_transport_rtt_ms = transport.rtt_ms if transport else math.nan
         for name in ('position_rev', 'velocity_rps', 'torque_nm', 'opening_fraction',
                      'width_mm', 'estimated_force_n', 'voltage_v', 'temperature_c'):
             setattr(msg, name, math.nan)
@@ -98,13 +111,32 @@ class Connector(Node):
             msg.opening_fraction, msg.width_mm = self.c.opening(s.position), self.c.width(s.position)
             msg.estimated_force_n = abs(s.torque)*self.c.force_n_per_nm if msg.force_calibrated else math.nan
             msg.voltage_v, msg.temperature_c = s.voltage, s.temperature
-            if connected:
+            if msg.connected:
                 joints = JointState()
                 joints.header = msg.header
                 joints.name = ['mini_handler_motor']
                 joints.position, joints.velocity, joints.effort = [s.position*math.tau], [s.velocity*math.tau], [s.torque]
                 self.joint_pub.publish(joints)
         self.state_pub.publish(msg)
+        status = (msg.connected, msg.ready, phase, error)
+        if status != self.last_connection:
+            self.publish_connection()
+            self.last_connection = status
+
+    def publish_connection(self):
+        import time
+        s, connected, phase, error, _ = self.controller.snapshot()
+        msg = Connection()
+        msg.header.stamp = self.get_clock().now().to_msg()
+        msg.sample_age_s = time.monotonic()-s.received_at if s else math.inf
+        msg.connected = connected and msg.sample_age_s <= max(.2, 3/self.c.poll_hz)
+        msg.ready = msg.connected and not error and not self.controller.fault_latched
+        msg.ever_connected = self.controller.ever_connected
+        msg.recovery_required = self.controller.fault_latched
+        msg.status = ('ready' if msg.ready else 'recovery_required' if msg.connected else
+                      'disconnected' if msg.ever_connected else 'not_connected')
+        msg.detail = error or phase
+        self.connection_pub.publish(msg)
 
 
 def main():

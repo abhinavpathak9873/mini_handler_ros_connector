@@ -17,7 +17,8 @@ class Config:
     poll_hz: float = 50.0
     request_timeout_s: float = .1
     open_position_rev: float = -.1597
-    close_position_rev: float = .35
+    close_position_rev: float = .132523
+    reconnect_interval_s: float = 1.0
     min_width_mm: float = 55.0
     max_width_mm: float = 105.0
     width_calibrated: bool = False
@@ -52,7 +53,8 @@ class Config:
             raise ValueError('invalid endpoint calibration')
         for name in ('max_speed_rps', 'max_acceleration_rps2', 'max_torque_nm',
                      'open_torque_nm', 'close_torque_nm', 'command_timeout_s',
-                     'settle_time_s', 'position_tolerance_rev', 'stationary_velocity_rps'):
+                     'settle_time_s', 'position_tolerance_rev', 'stationary_velocity_rps',
+                     'reconnect_interval_s'):
             if getattr(self, name) <= 0:
                 raise ValueError(f'{name} must be positive')
         if (max(self.open_torque_nm, self.close_torque_nm) > self.max_torque_nm
@@ -92,8 +94,11 @@ class Plan:
 
 
 class Controller:
-    def __init__(self, config, transport, on_result=lambda result: None):
+    def __init__(self, config, transport=None, on_result=lambda result: None, transport_factory=None):
         self.config, self.transport, self.on_result = config, transport, on_result
+        self.transport_factory = transport_factory
+        self.ever_connected = False
+        self.fault_latched = False
         self.lock = threading.RLock()
         self.wake = threading.Event()
         self.shutting_down = False
@@ -117,6 +122,23 @@ class Controller:
         if time.monotonic()-self.sample.received_at > max(.2, 3/self.config.poll_hz):
             raise ValueError('feedback stale')
         self._check(self.sample)
+
+    def recover(self):
+        """Acknowledge a recovered link/fault without sending a motor command."""
+        with self.lock:
+            if not self.connected or self.sample is None:
+                raise ValueError('not connected')
+            if time.monotonic()-self.sample.received_at > max(.2, 3/self.config.poll_hz):
+                raise ValueError('feedback stale')
+            self._check(self.sample)
+            if self.active or self.stop_pending or abs(self.sample.velocity) >= self.config.stationary_velocity_rps:
+                raise ValueError('motor must be stationary with no pending command')
+            self.fault_latched = False
+            self.error, self.phase = '', 'idle'
+
+    def at_closed_reference(self, sample):
+        return bool(sample and abs(sample.position-self.config.close_position_rev) <= self.config.position_tolerance_rev
+                    and abs(sample.velocity) < self.config.stationary_velocity_rps)
 
     def submit(self, operation, value=0., speed_scale=0., acceleration_scale=0.,
                torque_limit_nm=0., timeout_s=0.):
@@ -209,12 +231,14 @@ class Controller:
         with self.lock:
             self.sample = sample
             self.connected = True
+            self.ever_connected = True
         self._check(sample)
 
     def _finish(self, plan, outcome, detail):
         sample = self.sample
         result = dict(command_id=plan.command_id,
-                      success=outcome in ('reached', 'contact'), outcome=outcome, detail=detail,
+                      success=outcome in ('reached', 'closed', 'contact'), outcome=outcome, detail=detail,
+                      at_closed_reference=self.at_closed_reference(sample) and self.connected,
                       position_rev=sample.position if sample else math.nan,
                       opening_fraction=self.config.opening(sample.position) if sample else math.nan,
                       torque_nm=sample.torque if sample else math.nan,
@@ -304,14 +328,16 @@ class Controller:
         elif condition and time.monotonic()-plan.settled_at >= c.settle_time_s:
             if condition == 'contact':
                 if plan.operation in ('close', 'grip_torque', 'grip_force') and plan.closing:
-                    self._finish(plan, 'contact', 'sustained stationary torque; endpoint not reached')
+                    self._finish(plan, 'contact', 'sustained stationary torque before empty-jaw reference; object or resistance, not full closure')
                 else:
                     self._hold()
                     self._finish(plan, 'blocked', 'target obstructed before arrival')
             elif plan.operation in ('grip_torque', 'grip_force') and not loaded:
                 self._finish(plan, 'blocked', 'closed endpoint reached without requested effort')
             else:
-                self._finish(plan, 'reached', 'position reached and stationary')
+                closed = plan.operation in ('close', 'grip_torque', 'grip_force') and self.at_closed_reference(s)
+                self._finish(plan, 'closed' if closed else 'reached',
+                             'empty-jaw reference reached; not proof that jaws are empty' if closed else 'position reached and stationary')
 
     def _run(self):
         try:
@@ -319,7 +345,15 @@ class Controller:
                 self.wake.clear()
                 start = time.monotonic()
                 try:
+                    if self.transport is None:
+                        if self.transport_factory is None:
+                            break
+                        self.transport = self.transport_factory()
                     self._tick()
+                    if not self.fault_latched:
+                        self.error = ''
+                        if self.phase in ('communication_error', 'connecting'):
+                            self.phase = 'idle'
                 except Exception as exc:
                     outcome = 'communication_error' if isinstance(exc, (OSError, ValueError)) else 'fault'
                     detail = str(exc)
@@ -332,13 +366,21 @@ class Controller:
                             detail += f'; HOLD UNCONFIRMED: {hold_error}'
                     with self.lock:
                         self.error, self.phase = detail, outcome
-                        self.connected = False
+                        self.fault_latched = self.fault_latched or self.ever_connected
+                        self.connected = outcome == 'fault' and self.sample is not None
                         active, stop = self.active, self.stop_pending
                         self.stop_pending = None
                     for plan in (active, stop):
                         if plan:
                             self._finish(plan, outcome, detail)
-                    break  # Explicit restart required; no automatic movement/reconnection.
+                    if self.transport_factory is None:
+                        break
+                    if outcome == 'communication_error' and self.transport is not None:
+                        self.transport.close()
+                        self.transport = None
+                    # Retry reads only. Results and the motion-inhibit latch survive.
+                    self.wake.wait(self.config.reconnect_interval_s)
+                    continue
                 self.wake.wait(max(0., 1/self.config.poll_hz-(time.monotonic()-start)))
         finally:
             if self.shutting_down and not self.error and self.sample:
@@ -348,7 +390,8 @@ class Controller:
                         self._finish(self.active, 'cancelled', 'shutdown; stationary hold confirmed')
                 except Exception as exc:
                     self.error = f'shutdown HOLD UNCONFIRMED: {exc}'
-            self.transport.close()
+            if self.transport is not None:
+                self.transport.close()
 
     def close(self):
         self.shutting_down = True

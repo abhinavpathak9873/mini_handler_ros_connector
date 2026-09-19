@@ -12,7 +12,7 @@ from mini_handler_ros_connector.srv import Command, GetResult
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument('operation', choices=['status', 'open', 'close', 'stop', 'opening',
+    parser.add_argument('operation', choices=['status', 'recover', 'open', 'close', 'stop', 'opening',
         'relative', 'width', 'relative_mm', 'grip_torque', 'grip_force'])
     parser.add_argument('value', type=float, nargs='?', default=0.)
     parser.add_argument('--speed', type=float, default=0., help='scale 0..1; zero uses default')
@@ -50,6 +50,10 @@ def main():
                 raise RuntimeError('no state received')
             print(json.dumps(message_to_ordereddict(received[-1]), indent=2))
             return 0
+        if args.operation == 'recover':
+            response = call(Trigger, 'recover', Trigger.Request())
+            print(json.dumps({'success': response.success, 'message': response.message}))
+            return 0 if response.success else 2
         if args.operation == 'stop':
             response = call(Trigger, 'stop', Trigger.Request())
             if not response.success:

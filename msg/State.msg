@@ -1,5 +1,8 @@
 std_msgs/Header header
 bool connected
+bool ready
+# Stationary within tolerance of the recorded empty-jaw reference; not object detection.
+bool at_closed_reference
 bool simulated
 bool busy
 string command_id

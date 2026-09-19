@@ -6,7 +6,10 @@
     poll_hz: 50.0
     request_timeout_s: 0.10
     open_position_rev: -0.1597
-    close_position_rev: 0.35
+    # Empty jaws: recorded stationary 3.38 Nm stop with a 3.50 Nm limit.
+    # Operational closed reference, not proof of a mechanical hard stop.
+    close_position_rev: 0.132523
+    reconnect_interval_s: 1.0
     # Nominal old fixture labels; measure both endpoints before enabling mm commands.
     min_width_mm: 55.0
     max_width_mm: 105.0

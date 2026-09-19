@@ -1,0 +1,16 @@
+[Unit]
+Description=Mini-handler ROS connector (read-only on startup)
+StartLimitIntervalSec=0
+
+[Service]
+Type=simple
+# Override this path if the checkout is elsewhere. No privileged container.
+WorkingDirectory=%h/Documents/mini_handler_ros_connector
+ExecStart=/usr/bin/docker compose -f compose.boot.yaml up --no-build --abort-on-container-exit --exit-code-from gripper
+ExecStop=/usr/bin/docker compose -f compose.boot.yaml stop --timeout 8
+Restart=on-failure
+RestartSec=5
+TimeoutStopSec=15
+
+[Install]
+WantedBy=default.target

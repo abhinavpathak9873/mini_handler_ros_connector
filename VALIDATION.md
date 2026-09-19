@@ -1,5 +1,26 @@
 # Validation record — 2026-09-19
 
+## Connection/boot and empty-jaw-reference update
+
+The operator selected the previous empty-jaw torque stop (+0.132523 rev at
+3.380 Nm, with 3.50 Nm commanded) as the operational closed reference. The new
+configuration uses it instead of +0.35 rev. `closed`/`at_closed_reference` means
+stationary at that reference, not proof of empty jaws or a verified hard stop.
+Earlier closing resistance remains successful `contact`, with no reference
+overwrite. Fractional travel is recalculated using the new span. No physical
+movement has been issued to commission this update.
+
+51 unit/protocol tests pass, including absent startup, read-only reconnect,
+motion-inhibit recovery, retained failed-command results, no command replay,
+and contact-versus-reference classification. The image build also tests actual
+ROS connection messages and rejected commands with a nonexistent device path.
+The boot Compose file passes configuration validation and the user service
+passes systemd unit verification. Deployment/restart results are recorded below
+after checking the published image.
+
+The following sections preserve the **initial release's** measurements and
+old endpoint values; they are not new physical measurements for this update.
+
 ## Automated checks
 
 The multistage Docker build runs 47 unit and failure tests, then starts a real

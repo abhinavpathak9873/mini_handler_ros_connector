@@ -1,4 +1,5 @@
-FROM ros:humble-ros-core AS runtime-base
+ARG ROS_BASE=ros:humble-ros-core
+FROM ${ROS_BASE} AS runtime-base
 ENV DEBIAN_FRONTEND=noninteractive
 RUN apt-get update && apt-get install -y --no-install-recommends \
     ros-humble-rclpy ros-humble-std-msgs ros-humble-std-srvs \

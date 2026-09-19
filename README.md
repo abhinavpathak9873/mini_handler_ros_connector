@@ -55,6 +55,7 @@ docker compose exec gripper /entrypoint.sh mini-handler relative 0.1
 docker compose exec gripper /entrypoint.sh mini-handler close --speed 0.5 --accel 0.25
 docker compose exec gripper /entrypoint.sh mini-handler grip_torque 2.5
 docker compose exec gripper /entrypoint.sh mini-handler stop
+docker compose exec gripper /entrypoint.sh mini-handler recover
 ```
 
 `relative -0.1` reduces opening by **10 percentage points of total travel**;
@@ -88,6 +89,8 @@ Default namespace is `/mini_handler`. Override with standard ROS remapping
 | `command` | `mini_handler_ros_connector/srv/Command` | Immediate accept/reject + command ID |
 | `open`, `close`, `stop` | `std_srvs/srv/Trigger` | Convenience acceptance; `message` is command ID |
 | `state` | `mini_handler_ros_connector/msg/State` | Freshness, position, velocity, torque, opening, nominal/calibrated width, force estimate, voltage, temperature, fault, busy |
+| `connection` | `mini_handler_ros_connector/msg/Connection` | Fresh connection, readiness, recovery latch and explanatory status; reliable/transient-local, 1 Hz heartbeat plus changes |
+| `recover` | `std_srvs/srv/Trigger` | Explicitly acknowledge recovered fresh stationary feedback; never commands motion or resets a motor fault |
 | `results` | `mini_handler_ros_connector/msg/Result` | Terminal result for each accepted command |
 | `get_result` | `mini_handler_ros_connector/srv/GetResult` | Retrieve active/completed status by ID; last 128 results retained |
 | `joint_states` | `sensor_msgs/msg/JointState` | Motor-shaft radians, rad/s, Nm; not a fictitious linear finger joint |
@@ -113,6 +116,7 @@ while busy. Stop interrupts the current command and confirms a stationary hold.
 Terminal outcomes:
 
 - `reached`: target reached, velocity settled; full close only if endpoint reached.
+- `closed`: close/grip reached the recorded empty-jaw reference and settled.
 - `contact`: close/grip stopped at sustained torque before the endpoint. This is
   resistance evidence, not proof of an object or full closure.
 - `blocked`: a distance/opening command could not reach its target, or grip reached
@@ -135,7 +139,8 @@ per-command scaling, effort, and timeouts are adjustable on every request.
 | `port`, `motor_id` | `/dev/mini_handler`, `1` | Exclusive serial ownership and motor address |
 | `poll_hz` | 50 | Feedback rate; 1..200 configurable |
 | `request_timeout_s` | 0.10 | Bounded serial transaction |
-| `open_position_rev`, `close_position_rev` | -0.1597, +0.35 | Existing operator-supplied encoder travel |
+| `open_position_rev`, `close_position_rev` | -0.1597, +0.132523 | Confirmed open / operator-selected empty-jaw torque-stop reference |
+| `reconnect_interval_s` | 1.0 | Read-only retry interval after absent/lost serial or motor feedback |
 | `max_speed_rps` | 1.0 | Output-shaft rev/s ceiling |
 | `max_acceleration_rps2` | 1.0 | Output-shaft rev/s² ceiling |
 | `open_torque_nm`, `close_torque_nm` | 3.07, 3.50 | Default direction limits |
@@ -147,10 +152,21 @@ per-command scaling, effort, and timeouts are adjustable on every request.
 | `contact_ratio` | 0.95 | Sustained stationary torque / requested torque ratio |
 | `extended_telemetry` | true | Include float bus voltage and temperature |
 
-The existing open endpoint has operator confirmation. The +0.35 closed endpoint
-has previously been obstructed before arrival; full mechanical closure and
-absolute millimetre calibration are provisional. Configure your own unit's
-measured endpoints. No automatic homing or pushing beyond travel is performed.
+The open endpoint has operator confirmation. The closed reference is now the
+recorded empty-jaw stationary stop at +0.132523 rev, observed at 3.380 Nm with
+a 3.50 Nm limit. This replaces the unreachable +0.35 target and defines zero
+opening for this fixture. It is an operational reference, not a newly verified
+mechanical hard stop or millimetre calibration. All fractional commands now use
+this shorter span. No extra physical cycle was used to install this change.
+
+Closing stops on sustained torque **wherever it encounters resistance**.
+At the reference (within 0.002 rev) it reports `closed`; earlier resistance
+reports successful `contact`, not full closure. Distance commands still fail
+with `blocked` if obstructed. Neither case changes the saved reference.
+`at_closed_reference` is also present in state and results. An object near the
+reference cannot be distinguished from empty jaws from these signals alone;
+`contact` is not proof of secure object retention. No automatic homing or pushing
+beyond travel is performed.
 
 The old 55–105 mm labels are published with `width_calibrated=false`. Millimetre
 commands are rejected until measured endpoint widths are saved and
@@ -163,9 +179,62 @@ torque range before setting a conversion. The simple linear conversion remains
 an estimate. A CAD-only ideal conversion is deliberately not enabled.
 
 On idle startup and after a fault, the connector never resets the motor. A
-communication failure latches the session and requires an explicit container
-restart after recovery; it never reconnects and replays a movement automatically.
+communication failure terminates an active command and latches motion inhibition.
+The connection worker retries **reads only**, retaining the failed result and
+never replaying a movement. Once feedback is fresh, stationary and fault-free,
+call `recover` to acknowledge recovery before issuing a new command. First-ever
+connection after an absent-device boot needs no acknowledgment. A motor fault
+is never reset automatically. A process restart does not retain in-memory history
+or the latch; startup still sends no movement and checks fresh feedback.
 Only one driver may own the port, including the original Picker driver.
+
+## Connection monitoring and boot service
+
+The ROS node stays alive even when the adapter or powered motor is absent.
+`/mini_handler/connection` reports `not_connected`, `disconnected`,
+`recovery_required`, or `ready`. `connected` means fresh motor feedback, not
+just a USB device path. `ready` additionally requires no latched fault; a busy
+command can still reject a new request. Subscribe with reliable/transient-local
+QoS for immediate last-status delivery. The heartbeat is 1 Hz; clients must
+treat a missing heartbeat (for example, over 3 s) as unknown/offline, not trust
+a retained `true` forever. `state` additionally exposes `ready` and sample age.
+
+```bash
+docker compose exec gripper /entrypoint.sh ros2 topic echo /mini_handler/connection \
+  --qos-durability transient_local --qos-reliability reliable
+```
+
+For Linux boot/hotplug operation use `compose.boot.yaml`. Unlike the strict
+single-device manual Compose file, it starts with no adapter attached. It mounts
+host `/dev` read-only at `/host/dev` and permits read/write **USB ACM character
+devices only (major 166)** using Docker's device cgroup. This exposes device
+metadata and allows ACM devices, but not arbitrary host devices, privileged
+mode or the Docker socket. Prefer your adapter's stable by-id path. Non-ACM
+adapters require an explicitly reviewed different rule.
+
+With this checkout at `$HOME/Documents/mini_handler_ros_connector`:
+
+```bash
+# Put SERIAL_PORT=/dev/serial/by-id/YOUR_ADAPTER in .env (optional ROS_DOMAIN_ID too).
+docker compose -f compose.boot.yaml pull
+mkdir -p "$HOME/.config/systemd/user"
+install -m 644 deploy/mini-handler.service "$HOME/.config/systemd/user/"
+systemctl --user daemon-reload
+sudo loginctl enable-linger "$USER"
+systemctl --user enable --now mini-handler.service
+systemctl --user status mini-handler.service
+journalctl --user -u mini-handler.service -f
+```
+
+For another checkout location, edit the installed unit's `WorkingDirectory`.
+The user must have Docker access. Linger starts the user manager at boot without
+login ([systemd documentation](https://www.freedesktop.org/software/systemd/man/252/loginctl.html)).
+The service retries startup if Docker is not ready. It starts **telemetry only**,
+never arm bringup, homing, opening, closing or fault reset. Use
+`systemctl --user stop mini-handler` before letting the legacy driver own the port;
+`disable --now` also disables boot startup. Do not manage this deployment with a
+second Compose invocation while systemd owns it. No host reboot is needed to
+install it. Device rules are described in [Docker's Compose reference](https://docs.docker.com/reference/compose-file/services/#device_cgroup_rules).
 
 Stop and graceful shutdown use fresh position feedback to establish a hold.
 An already stationary loaded gripper retains its clamp. Serial disconnect,

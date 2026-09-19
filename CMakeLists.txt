@@ -5,7 +5,7 @@ find_package(ament_cmake_python REQUIRED)
 find_package(rosidl_default_generators REQUIRED)
 find_package(std_msgs REQUIRED)
 rosidl_generate_interfaces(${PROJECT_NAME}
-  "msg/State.msg" "msg/Result.msg" "srv/Command.srv" "srv/GetResult.srv"
+  "msg/State.msg" "msg/Result.msg" "msg/Connection.msg" "srv/Command.srv" "srv/GetResult.srv"
   DEPENDENCIES std_msgs)
 ament_python_install_package(mini_handler)
 install(PROGRAMS scripts/connector scripts/mini-handler DESTINATION lib/${PROJECT_NAME})

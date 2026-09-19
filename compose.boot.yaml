@@ -1,0 +1,23 @@
+# Linux fdcanusb/ttyACM deployment that can start without an attached adapter.
+# /host/dev is read-only metadata; cgroup permission is limited to USB ACM devices.
+services:
+  gripper:
+    image: ghcr.io/abhinavpathak9873/mini_handler_ros_connector:latest
+    network_mode: host
+    init: true
+    restart: "no"
+    stop_grace_period: 8s
+    device_cgroup_rules:
+      - 'c 166:* rw'
+    environment:
+      ROS_DOMAIN_ID: "${ROS_DOMAIN_ID:-0}"
+    volumes:
+      - /dev:/host/dev:ro
+      - ./config/gripper.yaml:/opt/mini_handler/share/mini_handler_ros_connector/config/gripper.yaml:ro
+    command:
+      - /opt/mini_handler/lib/mini_handler_ros_connector/connector
+      - --ros-args
+      - --params-file
+      - /opt/mini_handler/share/mini_handler_ros_connector/config/gripper.yaml
+      - -p
+      - "port:=/host${SERIAL_PORT:-/dev/ttyACM0}"
