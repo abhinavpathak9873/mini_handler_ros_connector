@@ -29,7 +29,9 @@
     default_acceleration_scale: 1.0
     command_timeout_s: 12.0
     settle_time_s: 0.15
-    position_tolerance_rev: 0.002
+    # Allow normal endpoint compliance without misclassifying a physically
+    # reached open/closed stop as a timeout.
+    position_tolerance_rev: 0.006
     stationary_velocity_rps: 0.01
     contact_ratio: 0.95
     # Float telemetry for position/velocity/torque; optional slow diagnostics.
