@@ -1,5 +1,20 @@
 # Validation record — 2026-09-19
 
+## Linux ARM64 / Jetson container validation — 2026-09-20
+
+The complete multistage image was built for `linux/arm64` with Docker Buildx
+and QEMU user-mode emulation. All 53 unit/protocol tests passed inside the
+ARM64 build, the ROS 2 Humble package compiled successfully, and the ROS
+integration runner reported both `ROS_INTEGRATION_PASS` and
+`ROS_ABSENT_DEVICE_PASS`. The resulting OCI index identifies its platform as
+`linux/arm64`; its local archive SHA-256 is
+`c0310518c2a00c9a252765494f8f64a47a31cfae7fa5880207d87a64f1d4a294`.
+
+This validates the architecture, dependencies, package build, simulator, ROS
+interfaces, and missing-device path. QEMU is not a physical Jetson, so USB
+enumeration, fdcanusb access, and motor operation still require a smoke test on
+the AGX Orin. The connector has no CUDA, TensorRT, GPU, or L4T dependency.
+
 ## Connection/boot and empty-jaw-reference update
 
 The operator selected the previous empty-jaw torque stop (+0.132523 rev at
@@ -158,5 +173,6 @@ rewire the tray stack to a new gripper interface.
 - The provisional closed endpoint remains unvalidated because of resistance.
 - Loss of communication cannot guarantee a physical stop. No firmware watchdog
   was commissioned. Stop is a software measured-position hold.
-- Linux amd64 tested; ARM, Docker Desktop USB, other adapter types, endurance,
-  EMC and network-failure qualification are not claimed.
+- Linux amd64 and emulated Linux ARM64 tested; physical Jetson USB, Docker
+  Desktop USB, other adapter types, endurance, EMC and network-failure
+  qualification are not claimed.

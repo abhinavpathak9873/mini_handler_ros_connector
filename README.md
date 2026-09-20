@@ -272,6 +272,43 @@ For multiple grippers, run one container per serial device, with distinct ROS
 namespaces. USB hotplug may change the kernel device: recreate the container
 after reconnecting, preferably using a `/dev/serial/by-id` path.
 
+## NVIDIA Jetson AGX Orin (ARM64)
+
+The connector has no CUDA, GPU, TensorRT, or NVIDIA-container-runtime dependency.
+The same Compose files are used on x86-64 and Jetson; CI publishes one
+multi-architecture `latest`/SHA tag containing both `linux/amd64` and
+`linux/arm64` images. Docker automatically selects ARM64 on the Jetson, so no
+Jetson-specific branch is required.
+
+Jetson AGX Orin requires JetPack 5 or newer. NVIDIA did not release JetPack 4.7,
+and JetPack 4.x does not support AGX Orin. Confirm the actual target release and
+architecture on the Jetson before deployment:
+
+```bash
+uname -m
+head -n 1 /etc/nv_tegra_release
+dpkg-query --show nvidia-jetpack 2>/dev/null || true
+```
+
+`uname -m` must report `aarch64`. With Docker Engine and the Compose plugin
+installed, deploy exactly as on other Linux hosts:
+
+```bash
+git clone https://github.com/abhinavpathak9873/mini_handler_ros_connector.git
+cd mini_handler_ros_connector
+printf 'SERIAL_PORT=/dev/serial/by-id/YOUR_FDCANUSB_ADAPTER\nROS_DOMAIN_ID=0\n' > .env
+docker compose pull
+docker compose up -d --no-build
+docker compose exec -T gripper /entrypoint.sh mini-handler status
+```
+
+The fdcanusb adapter must appear as a host `ttyACM` device and the motor still
+requires its external 24 V supply. No Jetson GPU device or privileged container
+access is needed. The release validates ARM64 by executing the complete Docker
+build, unit/protocol tests, pseudo-terminal serial tests, and ROS integration
+inside an emulated `linux/arm64` build; final USB/motor validation must be run on
+the physical Jetson.
+
 ## Simulation and tests
 
 ```bash
