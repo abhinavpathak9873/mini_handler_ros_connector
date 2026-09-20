@@ -11,13 +11,13 @@ from .protocol import target
 
 @dataclass(frozen=True)
 class Config:
-    port: str = '/dev/mini_handler'
+    port: str = 'auto'
     motor_id: int = 1
     simulate: bool = False
     poll_hz: float = 50.0
     request_timeout_s: float = .1
-    open_position_rev: float = -.170135498
-    close_position_rev: float = .325454712
+    open_position_rev: float = -.295181274
+    close_position_rev: float = .328063965
     # Maximum distance beyond either saved endpoint used only by the guarded
     # empty-jaw calibration operations.
     calibration_probe_margin_rev: float = .25
@@ -248,17 +248,21 @@ class Controller:
     def _check(self, sample):
         if sample.fault or sample.mode == 1:
             raise RuntimeError(f'motor fault={sample.fault}, mode={sample.mode}; no automatic reset')
-        c = self.config
-        low, high = sorted((c.open_position_rev, c.close_position_rev))
-        if self.calibration_session:
-            # Reversing from a loaded stop can unload a few encoder counts in
-            # the opposite direction before motion changes direction. During
-            # an explicitly requested calibration only, keep both sides within
-            # the same bounded probe envelope.
-            low -= c.calibration_probe_margin_rev
-            high += c.calibration_probe_margin_rev
-        if not low-c.position_tolerance_rev <= sample.position <= high+c.position_tolerance_rev:
-            raise RuntimeError('encoder outside configured travel')
+        # A saved endpoint is a motion target, not a validity boundary for
+        # feedback. Fingertip changes, manual movement and stall unloading can
+        # legitimately place the encoder just outside the old span. Normal
+        # commands always target a point inside the saved span and therefore
+        # bring the mechanism back in-bounds instead of making it unusable.
+        # Guarded calibration is the one exception: its deliberate overtravel
+        # remains bounded by calibration_probe_margin_rev.
+        plan = self.active
+        if plan and plan.operation in ('calibrate_open', 'calibrate_close'):
+            c = self.config
+            low, high = sorted((c.open_position_rev, c.close_position_rev))
+            low -= c.calibration_probe_margin_rev+c.position_tolerance_rev
+            high += c.calibration_probe_margin_rev+c.position_tolerance_rev
+            if not low <= sample.position <= high:
+                raise RuntimeError('calibration probe exceeded guarded travel envelope')
 
     def _record(self, sample):
         with self.lock:
@@ -414,10 +418,17 @@ class Controller:
                         except Exception as hold_error:
                             detail += f'; HOLD UNCONFIRMED: {hold_error}'
                     with self.lock:
-                        self.error, self.phase = detail, outcome
-                        self.fault_latched = self.fault_latched or self.ever_connected
-                        self.connected = outcome == 'fault' and self.sample is not None
                         active, stop = self.active, self.stop_pending
+                        interrupted_motion = active is not None or stop is not None
+                        self.error, self.phase = detail, outcome
+                        # Idle USB hotplug is safe to recover automatically: no
+                        # movement was in flight and reconnect performs reads only.
+                        # Preserve explicit acknowledgement for motor faults or
+                        # communication loss during a command, whose physical
+                        # outcome cannot be inferred after feedback disappears.
+                        self.fault_latched = (self.fault_latched or outcome == 'fault'
+                                              or (self.ever_connected and interrupted_motion))
+                        self.connected = outcome == 'fault' and self.sample is not None
                         self.stop_pending = None
                     for plan in (active, stop):
                         if plan:

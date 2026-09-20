@@ -6,13 +6,34 @@ import struct
 import threading
 import time
 import pytest
-from mini_handler.protocol import SerialMotor, parse, query, target
+from mini_handler.protocol import SerialMotor, parse, query, resolve_serial_port, target
 
 
 def feedback(position=.12345):
     return (b'\x21\x00\x0a\x21\x0f\x00\x2f\x01'
             + struct.pack('<fff', position, .02, 2.5)
             + b'\x2e\x0d' + struct.pack('<ff', 24., 35.))
+
+
+def test_auto_port_detects_unique_fdcanusb_and_rejects_ambiguity(tmp_path):
+    devices = tmp_path/'by-id'
+    devices.mkdir()
+    first_target = tmp_path/'ttyACM4'
+    first_target.touch()
+    first = devices/'usb-mjbots_fdcanusb_FIRST-if00'
+    first.symlink_to(first_target)
+    assert resolve_serial_port('auto', (devices,)) == str(first)
+
+    second_target = tmp_path/'ttyACM9'
+    second_target.touch()
+    (devices/'usb-mjbots_fdcanusb_SECOND-if00').symlink_to(second_target)
+    with pytest.raises(OSError, match='multiple'):
+        resolve_serial_port('auto', (devices,))
+
+
+def test_auto_port_waits_when_adapter_is_absent(tmp_path):
+    with pytest.raises(FileNotFoundError, match='plug it in'):
+        resolve_serial_port('auto', (tmp_path,))
 
 
 def test_wire_command_uses_stationary_target_and_independent_limits():

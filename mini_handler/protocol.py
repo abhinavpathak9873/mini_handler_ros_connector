@@ -6,9 +6,11 @@ robot-stack dependencies. Position command velocity is ZERO; 0x28/0x29
 are the independent speed and acceleration limits. Never resets motor faults.
 """
 import math
+import os
 import struct
 import time
 from dataclasses import dataclass
+from pathlib import Path
 
 
 @dataclass
@@ -21,6 +23,38 @@ class Sample:
     voltage: float = math.nan
     temperature: float = math.nan
     received_at: float = 0.0
+
+
+def resolve_serial_port(port, roots=None):
+    """Resolve one fdcanusb by identity; never guess when multiple exist."""
+    if port != 'auto':
+        # Compose exposes host devices below /host/dev. Keep explicit /dev paths
+        # convenient for operators while still avoiding a privileged container.
+        if port.startswith('/dev/') and Path('/host/dev').is_dir():
+            host_path = '/host'+port
+            if os.path.exists(host_path):
+                return host_path
+        return port
+
+    roots = roots or ('/host/dev/serial/by-id', '/dev/serial/by-id')
+    candidates = []
+    seen = set()
+    for root in roots:
+        directory = Path(root)
+        if not directory.is_dir():
+            continue
+        for candidate in directory.iterdir():
+            if 'fdcanusb' not in candidate.name.lower() or not candidate.exists():
+                continue
+            identity = str(candidate.resolve())
+            if identity not in seen:
+                candidates.append(str(candidate))
+                seen.add(identity)
+    if not candidates:
+        raise FileNotFoundError('no mjbots fdcanusb adapter detected; plug it in and the connector will retry')
+    if len(candidates) > 1:
+        raise OSError('multiple mjbots fdcanusb adapters detected; set SERIAL_PORT to one /dev/serial/by-id path')
+    return candidates[0]
 
 
 def query(extended=False):
@@ -88,7 +122,8 @@ class SerialMotor:
     def __init__(self, port, motor_id=1, timeout=.1, extended=True):
         import serial
         self.motor_id, self.timeout, self.extended = motor_id, timeout, extended
-        self.serial = serial.Serial(port, 3_000_000, timeout=.02,
+        self.port = resolve_serial_port(port)
+        self.serial = serial.Serial(self.port, 3_000_000, timeout=.02,
                                     write_timeout=timeout, exclusive=True)
         self.buffer = bytearray()
         self.rtt_ms = 0.0

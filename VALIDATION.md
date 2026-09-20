@@ -1,5 +1,33 @@
 # Validation record — 2026-09-19
 
+## Plug-and-play USB and out-of-span recovery — 2026-09-20
+
+The container now auto-discovers exactly one `mjbots_fdcanusb` through its
+stable `/dev/serial/by-id` identity. Both Compose deployments expose host device
+metadata read-only and grant only USB ACM major 166 through the device cgroup;
+they do not use privileged mode or the Docker socket. The connector can start
+without an adapter, repeats identity discovery, follows ACM renumbering, and
+automatically reconnects after an idle hotplug. Multiple matching adapters are
+rejected as ambiguous. A disconnect during an active command remains latched
+for explicit recovery because its physical result is uncertain.
+
+Saved encoder endpoints are now motion targets rather than feedback validity
+boundaries. Out-of-span feedback remains visible and connected, and ordinary
+open/close targets bring the mechanism back toward the saved span. The bounded
+overtravel envelope remains enforced for calibration probes.
+
+The final AMD64 image passed 57 unit/protocol tests, ROS compilation, simulator
+integration, and absent-device integration, then auto-discovered the real
+adapter at `/host/dev/ttyACM1`. Read-only hardware feedback reported
+`connected=true`, `ready=true`, motor fault 0, and no movement was commanded.
+The same final source completed the full build and test sequence independently
+for `linux/amd64` and `linux/arm64`. The resulting OCI index contains both
+platform manifests; its archive SHA-256 is
+`40b257e3ec306d9d45503e8b20b8ad583c541524a0e78212e19a6fb4ecaf0a06`.
+Actual unplug/replug still requires a physical hotplug test on the deployment
+host; resolver, absent-start, idle reconnect, and interrupted-command behavior
+are covered automatically.
+
 ## Linux ARM64 / Jetson container validation — 2026-09-20
 
 The complete multistage image was built for `linux/arm64` with Docker Buildx

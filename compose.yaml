@@ -4,11 +4,14 @@ services:
     build: .
     network_mode: host
     init: true
-    restart: "no"
+    restart: unless-stopped
     stop_grace_period: 8s
-    devices:
-      - "${SERIAL_PORT:-/dev/ttyACM0}:/dev/mini_handler"
+    # Permit only USB ACM character devices; no privileged mode or Docker socket.
+    device_cgroup_rules:
+      - 'c 166:* rwm'
     environment:
       ROS_DOMAIN_ID: "${ROS_DOMAIN_ID:-0}"
     volumes:
+      # Dynamic bind lets hot-plugged ACM nodes appear without recreating Docker.
+      - /dev:/host/dev:ro
       - ./config/gripper.yaml:/opt/mini_handler/share/mini_handler_ros_connector/config/gripper.yaml:ro

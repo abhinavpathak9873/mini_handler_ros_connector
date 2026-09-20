@@ -65,15 +65,13 @@ cd mini_handler_ros_connector
 docker compose up --build -d
 ```
 
-Default device is `/dev/ttyACM0`. For a stable device identity:
-
-```bash
-SERIAL_PORT=/dev/serial/by-id/YOUR_FDCANUSB_ADAPTER docker compose up --build -d
-```
-
-The motor needs its external 24 V supply. Only the selected serial device is
-passed through; no privileged container or Docker socket is needed. Linux host
-networking makes ROS communication on this computer work without port mapping.
+The connector auto-discovers exactly one `mjbots_fdcanusb` by its stable
+`/dev/serial/by-id` identity. It may be plugged in before or after startup and
+may change between `ttyACM0`, `ttyACM1`, and other ACM numbers. The connector
+keeps retrying and reconnects without recreating the container. The motor needs
+its external 24 V supply. Docker access is limited to USB ACM character devices;
+no privileged container or Docker socket is used. Linux host networking makes
+ROS communication on this computer work without port mapping.
 For the image published by this repository's CI:
 
 ```bash
@@ -84,7 +82,9 @@ docker compose up -d --no-build
 Or run the image directly:
 
 ```bash
-docker run --rm --init --network host --device /dev/ttyACM0:/dev/mini_handler \
+docker run --rm --init --network host \
+  --mount type=bind,src=/dev,dst=/host/dev,readonly \
+  --device-cgroup-rule='c 166:* rwm' \
   ghcr.io/abhinavpathak9873/mini_handler_ros_connector:latest
 ```
 
@@ -201,7 +201,7 @@ per-command scaling, effort, and timeouts are adjustable on every request.
 
 | Setting | Default | Meaning |
 | --- | ---: | --- |
-| `port`, `motor_id` | `/dev/mini_handler`, `1` | Exclusive serial ownership and motor address |
+| `port`, `motor_id` | `auto`, `1` | Auto-discover one fdcanusb by identity; exclusive serial ownership and motor address |
 | `poll_hz` | 50 | Feedback rate; 1..200 configurable |
 | `request_timeout_s` | 0.10 | Bounded serial transaction |
 | `open_position_rev`, `close_position_rev` | See `config/gripper.yaml` | Latest auto-calibrated empty-jaw stall references for the installed fingertips |
@@ -226,6 +226,13 @@ not independently verified rigid mechanical hard stops or a millimetre
 calibration. Run the guarded calibration again after changing fingertips. All
 fractional commands use the latest saved encoder span.
 
+Saved endpoints are targets, not feedback validity limits. If manual movement,
+fingertip replacement, or mechanical unloading leaves the encoder outside the
+saved span, telemetry remains connected and ordinary `open`/`close` commands
+move toward their configured in-span targets. Feedback and opening fractions
+outside 0..1 remain visible rather than being clamped. Guarded calibration
+probes retain their independent bounded overtravel envelope.
+
 Closing stops on sustained torque **wherever it encounters resistance**.
 At the reference (within 0.002 rev) it reports `closed`; earlier resistance
 reports successful `contact`, not full closure. Distance commands still fail
@@ -245,14 +252,15 @@ Measure opposing jaw compression with a load cell over the intended gap and
 torque range before setting a conversion. The simple linear conversion remains
 an estimate. A CAD-only ideal conversion is deliberately not enabled.
 
-On idle startup and after a fault, the connector never resets the motor. A
-communication failure terminates an active command and latches motion inhibition.
-The connection worker retries **reads only**, retaining the failed result and
-never replaying a movement. Once feedback is fresh, stationary and fault-free,
-call `recover` to acknowledge recovery before issuing a new command. First-ever
-connection after an absent-device boot needs no acknowledgment. A motor fault
-is never reset automatically. A process restart does not retain in-memory history
-or the latch; startup still sends no movement and checks fresh feedback.
+On idle startup and after a fault, the connector never resets the motor. The
+connection worker retries **reads only** and never replays a movement. Plugging,
+unplugging, or renumbering the adapter while idle reconnects automatically and
+sends no movement. Communication loss during an active command retains its
+failed result and latches motion inhibition because the physical outcome is
+uncertain; once feedback is fresh, stationary and fault-free, call `recover` to
+acknowledge that interrupted-command case. A motor fault is never reset
+automatically. A process restart does not retain in-memory history or the latch;
+startup still sends no movement and checks fresh feedback.
 Only one driver may own the port, including the original Picker driver.
 
 ## Connection monitoring and boot service
@@ -271,18 +279,18 @@ docker compose exec gripper /entrypoint.sh ros2 topic echo /mini_handler/connect
   --qos-durability transient_local --qos-reliability reliable
 ```
 
-For Linux boot/hotplug operation use `compose.boot.yaml`. Unlike the strict
-single-device manual Compose file, it starts with no adapter attached. It mounts
-host `/dev` read-only at `/host/dev` and permits read/write **USB ACM character
-devices only (major 166)** using Docker's device cgroup. This exposes device
-metadata and allows ACM devices, but not arbitrary host devices, privileged
-mode or the Docker socket. Prefer your adapter's stable by-id path. Non-ACM
-adapters require an explicitly reviewed different rule.
+Both Compose files support boot and hotplug with no adapter attached. They mount
+host `/dev` read-only at `/host/dev` and permit read/write **USB ACM character
+devices only (major 166)** using Docker's device cgroup. The connector scans the
+stable by-id directory for exactly one fdcanusb and repeats the scan after a
+disconnect. This exposes device metadata and ACM devices, but not arbitrary host
+devices, privileged mode, or the Docker socket. Non-ACM adapters require an
+explicitly reviewed different rule.
 
 With this checkout at `$HOME/Documents/mini_handler_ros_connector`:
 
 ```bash
-# Put SERIAL_PORT=/dev/serial/by-id/YOUR_ADAPTER in .env (optional ROS_DOMAIN_ID too).
+# No device setting is required. ROS_DOMAIN_ID in .env is optional.
 docker compose -f compose.boot.yaml pull
 mkdir -p "$HOME/.config/systemd/user"
 install -m 644 deploy/mini-handler.service "$HOME/.config/systemd/user/"
@@ -319,9 +327,10 @@ requires working DDS discovery/routing through the LAN/firewall; host networking
 does not remove those external requirements. The connector itself has no robot
 IP or fixed network-interface configuration.
 
-For multiple grippers, run one container per serial device, with distinct ROS
-namespaces. USB hotplug may change the kernel device: recreate the container
-after reconnecting, preferably using a `/dev/serial/by-id` path.
+For multiple fdcanusb adapters, automatic selection intentionally refuses to
+guess. Run one container per serial device with `SERIAL_PORT` set to each exact
+`/dev/serial/by-id/...` identity and use distinct ROS namespaces. A single
+adapter needs no setting and survives USB ACM number changes automatically.
 
 ## NVIDIA Jetson AGX Orin (ARM64)
 
@@ -347,7 +356,7 @@ installed, deploy exactly as on other Linux hosts:
 ```bash
 git clone https://github.com/abhinavpathak9873/mini_handler_ros_connector.git
 cd mini_handler_ros_connector
-printf 'SERIAL_PORT=/dev/serial/by-id/YOUR_FDCANUSB_ADAPTER\nROS_DOMAIN_ID=0\n' > .env
+printf 'ROS_DOMAIN_ID=0\n' > .env
 docker compose pull
 docker compose up -d --no-build
 docker compose exec -T gripper /entrypoint.sh mini-handler status

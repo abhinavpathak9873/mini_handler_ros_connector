@@ -1,6 +1,7 @@
 /**:
   ros__parameters:
-    port: /dev/mini_handler
+    # Auto-discovers exactly one mjbots fdcanusb by its /dev/serial/by-id identity.
+    port: auto
     motor_id: 1
     simulate: false
     poll_hz: 50.0

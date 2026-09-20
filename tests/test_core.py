@@ -147,7 +147,7 @@ def test_shutdown_cancels_and_holds(rig):
     assert not d.thread.is_alive()
 
 
-@pytest.mark.parametrize('kwargs', [dict(open_position_rev=.325454712), dict(max_torque_nm=1),
+@pytest.mark.parametrize('kwargs', [dict(open_position_rev=.328063965), dict(max_torque_nm=1),
     dict(poll_hz=0), dict(force_n_per_nm=-1), dict(default_speed_scale=2),
     dict(max_speed_rps=math.nan), dict(position_tolerance_rev=.4)])
 def test_bad_config_fails(kwargs):
@@ -160,6 +160,23 @@ def test_reverse_encoder_mapping():
     assert c.opening(1.) == 1
     assert c.position(.25) == -.5
     assert c.width(-1.) == 55.
+
+
+@pytest.mark.parametrize('start,operation', [(-.3, 'open'), (.5, 'close')])
+def test_feedback_outside_saved_span_stays_ready_and_reenters(start, operation):
+    c = Config(poll_hz=100., settle_time_s=.025, simulated_contact_fraction=-1.)
+    m = SimulatedMotor(c)
+    m.position = m.target = start
+    d = Controller(c, m)
+    try:
+        wait_for(lambda: d.connected)
+        assert not d.error
+        value = result(d, d.submit(operation))
+        assert value['success']
+        low, high = sorted((c.open_position_rev, c.close_position_rev))
+        assert low-c.position_tolerance_rev <= d.sample.position <= high+c.position_tolerance_rev
+    finally:
+        d.close()
 
 
 def test_read_only_session_shutdown_does_not_enable_idle_motor():
@@ -244,7 +261,7 @@ def test_calibration_speed_is_capped(rig):
         d.submit('calibrate_close', torque_limit_nm=2., speed_scale=.5)
 
 
-def test_absent_start_then_reconnect_is_read_only_and_loss_requires_recovery():
+def test_absent_start_and_idle_hotplug_reconnect_are_read_only_and_automatic():
     c = Config(reconnect_interval_s=.02, poll_hz=100.)
     m = SimulatedMotor(c)
     available = False
@@ -262,16 +279,14 @@ def test_absent_start_then_reconnect_is_read_only_and_loss_requires_recovery():
         wait_for(lambda: d.connected and not d.error)
         assert not m.commands
         m.disconnected = True
-        wait_for(lambda: d.fault_latched)
+        wait_for(lambda: not d.connected)
+        assert not d.fault_latched
         assert not d.connected
         m.disconnected = False
-        wait_for(lambda: d.connected)
-        with pytest.raises(ValueError):
-            d.submit('close')
+        wait_for(lambda: d.connected and not d.error)
+        assert not d.fault_latched
         assert not m.commands
-        d.recover()
-        assert not d.error and not d.fault_latched
-        assert not m.commands
+        assert result(d, d.submit('open'))['success']
     finally:
         d.close()
 

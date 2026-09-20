@@ -5,10 +5,10 @@ services:
     image: ghcr.io/abhinavpathak9873/mini_handler_ros_connector:latest
     network_mode: host
     init: true
-    restart: "no"
+    restart: unless-stopped
     stop_grace_period: 8s
     device_cgroup_rules:
-      - 'c 166:* rw'
+      - 'c 166:* rwm'
     environment:
       ROS_DOMAIN_ID: "${ROS_DOMAIN_ID:-0}"
     volumes:
@@ -20,4 +20,4 @@ services:
       - --params-file
       - /opt/mini_handler/share/mini_handler_ros_connector/config/gripper.yaml
       - -p
-      - "port:=/host${SERIAL_PORT:-/dev/ttyACM0}"
+      - "port:=${SERIAL_PORT:-auto}"
