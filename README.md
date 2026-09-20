@@ -6,6 +6,57 @@ One process owns one serial port. No arm stack, MoveIt, cameras, GPU, or desktop
 installation is required. Connecting only reads the motor; movement requires a
 command. The serial connection stays open between commands.
 
+## Open and close quick reference
+
+From the computer running the gripper container:
+
+```bash
+# Open
+docker compose exec gripper /entrypoint.sh mini-handler open
+
+# Close
+docker compose exec gripper /entrypoint.sh mini-handler close
+```
+
+From any ROS 2 computer that can discover the gripper over the network:
+
+```bash
+# Open
+ros2 service call /mini_handler/open std_srvs/srv/Trigger '{}'
+
+# Close
+ros2 service call /mini_handler/close std_srvs/srv/Trigger '{}'
+```
+
+In an existing `rclpy.node.Node` class, create the clients once:
+
+```python
+from std_srvs.srv import Trigger
+
+self.open_client = self.create_client(Trigger, '/mini_handler/open')
+self.close_client = self.create_client(Trigger, '/mini_handler/close')
+```
+
+Then open or close from the code with:
+
+```python
+self.open_client.call_async(Trigger.Request())   # Open
+self.close_client.call_async(Trigger.Request())  # Close
+```
+
+For control from another computer, both machines need compatible ROS 2/DDS
+middleware, the same `ROS_DOMAIN_ID` (the container defaults to `0`),
+`ROS_LOCALHOST_ONLY` must not be `1`, and the LAN/firewall must allow ROS 2
+discovery and data traffic. The container uses host networking. A normal local
+LAN usually works; guest Wi-Fi, client isolation, VPNs, routed subnets, and
+blocked multicast can prevent discovery. Verify from the laptop before moving:
+
+```bash
+export ROS_DOMAIN_ID=0
+unset ROS_LOCALHOST_ONLY
+ros2 service list | grep /mini_handler
+```
+
 ## Start in two commands (Linux)
 
 ```bash
@@ -37,8 +88,8 @@ docker run --rm --init --network host --device /dev/ttyACM0:/dev/mini_handler \
   ghcr.io/abhinavpathak9873/mini_handler_ros_connector:latest
 ```
 
-The supported release platform is Linux amd64. USB passthrough on Docker
-Desktop/WSL and ARM builds are not covered by this release.
+The tested container platforms are Linux amd64 and Linux arm64. USB passthrough
+on Docker Desktop/WSL is not covered by this release.
 
 ## Commands
 
