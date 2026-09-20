@@ -5,11 +5,11 @@
     simulate: false
     poll_hz: 50.0
     request_timeout_s: 0.10
-    open_position_rev: -0.170135498
+    open_position_rev: -0.295181274
     # Auto-calibrated with the currently installed empty fingertips at the
     # configured 3.07 Nm open / 4.00 Nm close directional torque limits.
     # Motion-stall references; torque is a safety ceiling, not endpoint detection.
-    close_position_rev: 0.325454712
+    close_position_rev: 0.328063965
     # Guarded calibration probes may search this far beyond either saved endpoint.
     calibration_probe_margin_rev: 0.25
     reconnect_interval_s: 1.0
