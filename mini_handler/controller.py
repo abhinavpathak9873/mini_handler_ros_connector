@@ -16,8 +16,11 @@ class Config:
     simulate: bool = False
     poll_hz: float = 50.0
     request_timeout_s: float = .1
-    open_position_rev: float = -.1597
-    close_position_rev: float = .132523
+    open_position_rev: float = -.170135498
+    close_position_rev: float = .325454712
+    # Maximum distance beyond either saved endpoint used only by the guarded
+    # empty-jaw calibration operations.
+    calibration_probe_margin_rev: float = .25
     reconnect_interval_s: float = 1.0
     min_width_mm: float = 55.0
     max_width_mm: float = 105.0
@@ -25,9 +28,9 @@ class Config:
     force_n_per_nm: float = 0.0
     max_speed_rps: float = 1.0
     max_acceleration_rps2: float = 1.0
-    max_torque_nm: float = 5.0
+    max_torque_nm: float = 4.0
     open_torque_nm: float = 3.07
-    close_torque_nm: float = 3.5
+    close_torque_nm: float = 4.0
     default_speed_scale: float = 1.0
     default_acceleration_scale: float = 1.0
     command_timeout_s: float = 12.0
@@ -49,6 +52,7 @@ class Config:
             raise ValueError('poll_hz must be 1..200; request timeout .01..1 s')
         if (self.open_position_rev == self.close_position_rev
                 or max(abs(self.open_position_rev), abs(self.close_position_rev)) > 1000
+                or not 0 < self.calibration_probe_margin_rev <= 1
                 or not 0 <= self.min_width_mm < self.max_width_mm):
             raise ValueError('invalid endpoint calibration')
         for name in ('max_speed_rps', 'max_acceleration_rps2', 'max_torque_nm',
@@ -91,6 +95,8 @@ class Plan:
     settled_at: float = 0.0
     condition: str = ''
     closing: bool = False
+    movement_sign: float = 0.0
+    motion_observed: bool = False
 
 
 class Controller:
@@ -108,6 +114,7 @@ class Controller:
         self.phase = 'connecting'
         self.active = None
         self.stop_pending = None
+        self.calibration_session = False
         self.results = OrderedDict()
         self.thread = threading.Thread(target=self._run, name='mini-handler-serial', daemon=True)
         self.thread.start()
@@ -143,7 +150,10 @@ class Controller:
     def submit(self, operation, value=0., speed_scale=0., acceleration_scale=0.,
                torque_limit_nm=0., timeout_s=0.):
         with self.lock:
+            calibrating = operation in ('calibrate_open', 'calibrate_close')
             self._fresh()
+            if self.calibration_session and not calibrating:
+                raise ValueError('calibration session active; save endpoints and restart before normal motion')
             if self.shutting_down:
                 raise ValueError('shutting down')
             if self.active or self.stop_pending:
@@ -156,7 +166,14 @@ class Controller:
             c = self.config
             current = c.opening(self.sample.position)
             torque = torque_limit_nm
-            if operation == 'open':
+            direction = math.copysign(1., c.close_position_rev-c.open_position_rev)
+            if operation == 'calibrate_open':
+                position = c.open_position_rev-direction*c.calibration_probe_margin_rev
+                opening = c.opening(position)
+            elif operation == 'calibrate_close':
+                position = c.close_position_rev+direction*c.calibration_probe_margin_rev
+                opening = c.opening(position)
+            elif operation == 'open':
                 opening = 1.
             elif operation in ('close', 'grip_torque', 'grip_force'):
                 opening = 0.
@@ -171,8 +188,10 @@ class Controller:
                            if operation == 'width' else current+value/(c.max_width_mm-c.min_width_mm))
             else:
                 raise ValueError('unknown operation')
-            if not 0 <= opening <= 1:
+            if not calibrating and not 0 <= opening <= 1:
                 raise ValueError('requested opening outside configured travel [0,1]')
+            if calibrating and torque_limit_nm <= 0:
+                raise ValueError('calibration requires an explicit --torque limit')
             if operation in ('grip_torque', 'grip_force'):
                 if torque_limit_nm:
                     raise ValueError('grip command uses value as its effort target; omit torque_limit_nm')
@@ -183,17 +202,24 @@ class Controller:
                     raise ValueError('grip effort must be positive')
             closing = opening < current
             torque = torque or (c.close_torque_nm if closing else c.open_torque_nm)
-            speed_scale = speed_scale or c.default_speed_scale
-            acceleration_scale = acceleration_scale or c.default_acceleration_scale
+            speed_scale = speed_scale or (min(c.default_speed_scale, .25) if calibrating else c.default_speed_scale)
+            acceleration_scale = acceleration_scale or (min(c.default_acceleration_scale, .25) if calibrating else c.default_acceleration_scale)
             if not 0 < speed_scale <= 1 or not 0 < acceleration_scale <= 1:
                 raise ValueError('speed/acceleration scaling must be in (0,1]')
+            if calibrating and (speed_scale > .25 or acceleration_scale > .25):
+                raise ValueError('calibration speed/acceleration cannot exceed 0.25')
             if not .01 <= torque <= c.max_torque_nm:
                 raise ValueError('torque exceeds configured range')
             # The device torque register has 0.01 Nm resolution; round down.
             torque = math.floor(torque*100+1e-9)/100
-            plan = Plan(uuid.uuid4().hex, operation, c.position(opening),
+            position = position if calibrating else c.position(opening)
+            movement_sign = math.copysign(1., position-self.sample.position)
+            plan = Plan(uuid.uuid4().hex, operation, position,
                         c.max_speed_rps*speed_scale, c.max_acceleration_rps2*acceleration_scale,
-                        torque, timeout_s or c.command_timeout_s, time.monotonic(), closing=closing)
+                        torque, timeout_s or c.command_timeout_s, time.monotonic(), closing=closing,
+                        movement_sign=movement_sign)
+            if calibrating:
+                self.calibration_session = True
             self.active = plan
             self.phase = 'accepted'
             self.wake.set()
@@ -224,6 +250,13 @@ class Controller:
             raise RuntimeError(f'motor fault={sample.fault}, mode={sample.mode}; no automatic reset')
         c = self.config
         low, high = sorted((c.open_position_rev, c.close_position_rev))
+        if self.calibration_session:
+            # Reversing from a loaded stop can unload a few encoder counts in
+            # the opposite direction before motion changes direction. During
+            # an explicitly requested calibration only, keep both sides within
+            # the same bounded probe envelope.
+            low -= c.calibration_probe_margin_rev
+            high += c.calibration_probe_margin_rev
         if not low-c.position_tolerance_rev <= sample.position <= high+c.position_tolerance_rev:
             raise RuntimeError('encoder outside configured travel')
 
@@ -311,14 +344,21 @@ class Controller:
             return
         s, c = self.sample, self.config
         stationary = abs(s.velocity) < c.stationary_velocity_rps and s.mode == 10
+        # A loaded mechanism can initially unload opposite the requested
+        # direction. That does not arm stall detection for the new move.
+        if s.velocity*plan.movement_sign >= c.stationary_velocity_rps:
+            plan.motion_observed = True
         arrived = abs(s.position-plan.position) <= c.position_tolerance_rev
         closing_sign = math.copysign(1., c.close_position_rev-c.open_position_rev)
+        probe = plan.operation in ('calibrate_open', 'calibrate_close')
         loaded = s.torque*closing_sign >= c.contact_ratio*plan.torque
         # Opening initially unloads the old clamp: its stationary positive
         # torque is not an opening obstruction. Match the commissioned driver:
         # only closing uses torque-contact completion; opening waits for its
         # position or the bounded deadline.
-        condition = ('reached' if arrived else 'contact' if loaded and plan.closing else '') if stationary else ''
+        probe_stalled = probe and plan.motion_observed and stationary and not arrived
+        condition = ('reached' if arrived else 'contact'
+                     if probe_stalled or (loaded and plan.closing and not probe) else '') if stationary else ''
         if condition != plan.condition:
             plan.settled_at = time.monotonic() if condition else 0.
             plan.condition = condition
@@ -327,11 +367,20 @@ class Controller:
             self._finish(plan, 'timeout', 'deadline elapsed; stationary hold confirmed')
         elif condition and time.monotonic()-plan.settled_at >= c.settle_time_s:
             if condition == 'contact':
-                if plan.operation in ('close', 'grip_torque', 'grip_force') and plan.closing:
+                if probe:
+                    # Cancel the deliberately out-of-range probe target before
+                    # publishing/saving the measured endpoint. Otherwise a
+                    # transient stall could unload and continue moving after
+                    # calibration reported completion.
+                    self._hold()
+                    self._finish(plan, 'contact', 'calibration stall detected after observed motion; save this endpoint only with empty, clear jaws')
+                elif plan.operation in ('close', 'grip_torque', 'grip_force') and plan.closing:
                     self._finish(plan, 'contact', 'sustained stationary torque before empty-jaw reference; object or resistance, not full closure')
                 else:
                     self._hold()
                     self._finish(plan, 'blocked', 'target obstructed before arrival')
+            elif probe:
+                self._finish(plan, 'blocked', 'calibration probe limit reached without detecting resistance; endpoint not updated')
             elif plan.operation in ('grip_torque', 'grip_force') and not loaded:
                 self._finish(plan, 'blocked', 'closed endpoint reached without requested effort')
             else:

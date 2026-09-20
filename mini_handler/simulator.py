@@ -41,6 +41,15 @@ class SimulatedMotor:
         contact = self.c.simulated_contact_fraction
         if contact >= 0 and self.c.opening(self.target) < contact and self.c.opening(self.position) <= contact:
             self.position, self.velocity, torque = self.c.position(contact), 0., self.limit
+        # Calibration probes deliberately target beyond the saved span. Model
+        # fixed empty-jaw stops at the saved endpoints and opposing effort in
+        # either direction.
+        elif self.c.opening(self.target) > 1 and self.c.opening(self.position) >= 1:
+            self.position, self.velocity = self.c.open_position_rev, 0.
+            torque = math.copysign(self.limit, self.target-self.position)
+        elif self.c.opening(self.target) < 0 and self.c.opening(self.position) <= 0:
+            self.position, self.velocity = self.c.close_position_rev, 0.
+            torque = math.copysign(self.limit, self.target-self.position)
         return Sample(self.position, self.velocity, torque, 10, self.fault, 24., 35., now)
 
     def close(self):

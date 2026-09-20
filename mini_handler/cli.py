@@ -13,7 +13,8 @@ from mini_handler_ros_connector.srv import Command, GetResult
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('operation', choices=['status', 'recover', 'open', 'close', 'stop', 'opening',
-        'relative', 'width', 'relative_mm', 'grip_torque', 'grip_force'])
+        'relative', 'width', 'relative_mm', 'grip_torque', 'grip_force',
+        'calibrate_open', 'calibrate_close'])
     parser.add_argument('value', type=float, nargs='?', default=0.)
     parser.add_argument('--speed', type=float, default=0., help='scale 0..1; zero uses default')
     parser.add_argument('--accel', type=float, default=0.)

@@ -6,3 +6,4 @@ install/
 log/
 .env
 artifacts/
+config/gripper.yaml.bak-*

@@ -147,7 +147,7 @@ def test_shutdown_cancels_and_holds(rig):
     assert not d.thread.is_alive()
 
 
-@pytest.mark.parametrize('kwargs', [dict(open_position_rev=.132523), dict(max_torque_nm=1),
+@pytest.mark.parametrize('kwargs', [dict(open_position_rev=.325454712), dict(max_torque_nm=1),
     dict(poll_hz=0), dict(force_n_per_nm=-1), dict(default_speed_scale=2),
     dict(max_speed_rps=math.nan), dict(position_tolerance_rev=.4)])
 def test_bad_config_fails(kwargs):
@@ -218,6 +218,30 @@ def test_object_contact_does_not_change_empty_reference(rig):
     assert not r['at_closed_reference']
     assert r['opening_fraction'] == pytest.approx(.6)
     assert d.config.close_position_rev == reference
+
+
+def test_guarded_calibration_probes_both_empty_stops(rig):
+    d, m = rig
+    with pytest.raises(ValueError, match='explicit --torque'):
+        d.submit('calibrate_open')
+    closed = result(d, d.submit('calibrate_close', torque_limit_nm=2.,
+                                speed_scale=.25, acceleration_scale=.25))
+    assert closed['outcome'] == 'contact'
+    assert closed['position_rev'] == pytest.approx(d.config.close_position_rev, abs=.002)
+    assert m.target == pytest.approx(m.position, abs=d.config.position_tolerance_rev)
+    opened = result(d, d.submit('calibrate_open', torque_limit_nm=2.,
+                                speed_scale=.25, acceleration_scale=.25))
+    assert opened['outcome'] == 'contact'
+    assert opened['position_rev'] == pytest.approx(d.config.open_position_rev, abs=.002)
+    assert m.target == pytest.approx(m.position, abs=d.config.position_tolerance_rev)
+    with pytest.raises(ValueError, match='calibration session active'):
+        d.submit('close')
+
+
+def test_calibration_speed_is_capped(rig):
+    d, _ = rig
+    with pytest.raises(ValueError, match='cannot exceed'):
+        d.submit('calibrate_close', torque_limit_nm=2., speed_scale=.5)
 
 
 def test_absent_start_then_reconnect_is_read_only_and_loss_requires_recovery():

@@ -1,4 +1,5 @@
-# open, close, opening, relative, width, relative_mm, grip_torque, grip_force
+# open, close, opening, relative, width, relative_mm, grip_torque, grip_force,
+# calibrate_open, calibrate_close (guarded motion-stall probes used by the host calibration command)
 # opening/relative use fractions; width/relative_mm use mm; grip_* use Nm/N.
 string operation
 float64 value

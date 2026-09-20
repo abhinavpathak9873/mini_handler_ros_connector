@@ -1,0 +1,148 @@
+#!/usr/bin/env python3
+"""Slowly find and persist empty-jaw open/closed motion-stall endpoints."""
+import argparse
+import datetime as dt
+import json
+import math
+import re
+import shutil
+import subprocess
+import sys
+import time
+from pathlib import Path
+
+
+ROOT = Path(__file__).resolve().parent.parent
+CONFIG = ROOT / 'config' / 'gripper.yaml'
+CLI = ['docker', 'compose', 'exec', '-T', 'gripper', '/entrypoint.sh', 'mini-handler']
+
+
+def run(command, check=True):
+    process = subprocess.run(command, cwd=ROOT, text=True, capture_output=True)
+    if process.stdout:
+        print(process.stdout, end='')
+    if process.stderr:
+        print(process.stderr, end='', file=sys.stderr)
+    if check and process.returncode:
+        raise RuntimeError(f'command failed ({process.returncode}): {" ".join(command)}')
+    return process
+
+
+def json_objects(text):
+    decoder = json.JSONDecoder()
+    objects = []
+    for index, character in enumerate(text):
+        if character != '{':
+            continue
+        try:
+            value, _ = decoder.raw_decode(text[index:])
+        except json.JSONDecodeError:
+            continue
+        if isinstance(value, dict):
+            objects.append(value)
+    return objects
+
+
+def status():
+    process = run(CLI + ['status'])
+    objects = [value for value in json_objects(process.stdout) if 'connected' in value and 'ready' in value]
+    if not objects:
+        raise RuntimeError('could not read gripper status JSON')
+    return objects[-1]
+
+
+def probe(operation, torque, speed, acceleration, timeout):
+    process = run(CLI + [operation, '--torque', str(torque), '--speed', str(speed),
+                         '--accel', str(acceleration), '--timeout', str(timeout)], check=False)
+    results = [value for value in json_objects(process.stdout) if 'outcome' in value]
+    if not results:
+        raise RuntimeError(f'{operation} produced no terminal result; endpoint not changed')
+    result = results[-1]
+    if process.returncode or result.get('outcome') != 'contact' or not result.get('success'):
+        raise RuntimeError(f'{operation} did not find a motion stall: {result.get("outcome")}: '
+                           f'{result.get("detail", "unknown result")}')
+    position = float(result['position_rev'])
+    if not math.isfinite(position):
+        raise RuntimeError(f'{operation} returned a non-finite position')
+    return position
+
+
+def replace_endpoint(text, name, value):
+    pattern = rf'(?m)^(\s*{re.escape(name)}:\s*)[^#\n]+(\s*(?:#.*)?)$'
+    updated, count = re.subn(pattern, rf'\g<1>{value:.9f}\g<2>', text, count=1)
+    if count != 1:
+        raise RuntimeError(f'could not update {name} in {CONFIG}')
+    return updated
+
+
+def restart_and_wait_ready():
+    run(['docker', 'compose', 'up', '-d', '--force-recreate', '--no-build'])
+    deadline = time.monotonic()+20
+    while time.monotonic() < deadline:
+        try:
+            current = status()
+            if current.get('connected') and current.get('ready'):
+                return current
+        except RuntimeError:
+            pass
+        time.sleep(1)
+    raise RuntimeError('connector did not become ready within 20 seconds; inspect logs')
+
+
+def main():
+    parser = argparse.ArgumentParser(
+        description='Open and close empty, clear jaws slowly; detect motion stalls and save both encoder endpoints.')
+    parser.add_argument('--yes-empty-and-clear', action='store_true',
+                        help='required acknowledgment that jaws are empty and their full travel is clear')
+    parser.add_argument('--open-torque', type=float, default=3.07,
+                        help='open-stop probe torque in Nm (default: configured 3.07)')
+    parser.add_argument('--close-torque', type=float, default=4.0,
+                        help='close-stop probe torque in Nm (default: configured 4.0)')
+    parser.add_argument('--speed', type=float, default=.15, help='speed scale, maximum 0.25')
+    parser.add_argument('--accel', type=float, default=.15, help='acceleration scale, maximum 0.25')
+    parser.add_argument('--timeout', type=float, default=15., help='deadline for each probe')
+    args = parser.parse_args()
+    if not args.yes_empty_and_clear:
+        parser.error('refusing motion: pass --yes-empty-and-clear after physically checking the jaws')
+    if not .01 <= args.open_torque <= 4 or not .01 <= args.close_torque <= 4:
+        parser.error('--open-torque and --close-torque must be between 0.01 and 4.0 Nm')
+    if not 0 < args.speed <= .25 or not 0 < args.accel <= .25:
+        parser.error('--speed and --accel must be in (0, 0.25]')
+    if args.timeout <= 0:
+        parser.error('--timeout must be positive')
+
+    before = status()
+    if before.get('simulated'):
+        raise RuntimeError('refusing to save hardware calibration from simulated state')
+    if not before.get('connected') or not before.get('ready') or before.get('busy'):
+        raise RuntimeError('gripper must be connected, ready, stationary, and not busy')
+
+    original = CONFIG.read_text()
+    stamp = dt.datetime.now().strftime('%Y%m%d-%H%M%S')
+    backup = CONFIG.with_name(f'{CONFIG.name}.bak-{stamp}')
+    shutil.copy2(CONFIG, backup)
+    print(f'Calibration backup: {backup}')
+
+    print('\nCALIBRATION: slowly probing for the open motion stall; keep the empty jaw path clear.', flush=True)
+    open_position = probe('calibrate_open', args.open_torque, args.speed, args.accel, args.timeout)
+    CONFIG.write_text(replace_endpoint(CONFIG.read_text(), 'open_position_rev', open_position))
+    print(f'Saved open_position_rev={open_position:.9f}; restarting the guarded span.')
+    restart_and_wait_ready()
+
+    print('\nCALIBRATION: slowly probing for the closed motion stall; keep hands and objects clear.', flush=True)
+    close_position = probe('calibrate_close', args.close_torque, args.speed, args.accel, args.timeout)
+    if abs(close_position-open_position) < .01:
+        raise RuntimeError('measured travel is implausibly small; endpoint file was not changed')
+    CONFIG.write_text(replace_endpoint(CONFIG.read_text(), 'close_position_rev', close_position))
+    print(f'Saved close_position_rev={close_position:.9f}')
+    restart_and_wait_ready()
+    print('\nCALIBRATION COMPLETE: connector restarted and is ready; jaws remain closed.')
+    return 0
+
+
+if __name__ == '__main__':
+    try:
+        raise SystemExit(main())
+    except (RuntimeError, OSError) as exc:
+        print(f'CALIBRATION FAILED: {exc}', file=sys.stderr)
+        raise SystemExit(2)

@@ -5,10 +5,13 @@
     simulate: false
     poll_hz: 50.0
     request_timeout_s: 0.10
-    open_position_rev: -0.1597
-    # Empty jaws: recorded stationary 3.38 Nm stop with a 3.50 Nm limit.
-    # Operational closed reference, not proof of a mechanical hard stop.
-    close_position_rev: 0.132523
+    open_position_rev: -0.170135498
+    # Auto-calibrated with the currently installed empty fingertips at the
+    # configured 3.07 Nm open / 4.00 Nm close directional torque limits.
+    # Motion-stall references; torque is a safety ceiling, not endpoint detection.
+    close_position_rev: 0.325454712
+    # Guarded calibration probes may search this far beyond either saved endpoint.
+    calibration_probe_margin_rev: 0.25
     reconnect_interval_s: 1.0
     # Nominal old fixture labels; measure both endpoints before enabling mm commands.
     min_width_mm: 55.0
@@ -18,9 +21,9 @@
     force_n_per_nm: 0.0
     max_speed_rps: 1.0
     max_acceleration_rps2: 1.0
-    max_torque_nm: 5.0
+    max_torque_nm: 4.0
     open_torque_nm: 3.07
-    close_torque_nm: 3.5
+    close_torque_nm: 4.0
     default_speed_scale: 1.0
     default_acceleration_scale: 1.0
     command_timeout_s: 12.0

@@ -130,6 +130,20 @@ These are ordinary Linux/USB timings, not hard real-time guarantees.
 
 ## Configuration and calibration
 
+With physically empty jaws and a clear full-travel path, one guarded host command
+can slowly find both motion-stall endpoints, back up the YAML file, save the measured
+encoder endpoints, and recreate the connector:
+
+```bash
+./scripts/calibrate-gripper --yes-empty-and-clear
+```
+
+The default probes use the configured 3.07 Nm open and 4.0 Nm close safety ceilings,
+15% speed and 15% acceleration. Override within the guarded limits with
+`--open-torque`, `--close-torque`, `--speed`, and `--accel`. Calibration
+finishes at the closed stop. It does not calibrate millimetres or Newtons; those
+still require physical jaw-width measurements and a load cell respectively.
+
 Edit [config/gripper.yaml](config/gripper.yaml), then
 `docker compose up -d --force-recreate`. Parameters are read-only while running;
 per-command scaling, effort, and timeouts are adjustable on every request.
@@ -139,12 +153,13 @@ per-command scaling, effort, and timeouts are adjustable on every request.
 | `port`, `motor_id` | `/dev/mini_handler`, `1` | Exclusive serial ownership and motor address |
 | `poll_hz` | 50 | Feedback rate; 1..200 configurable |
 | `request_timeout_s` | 0.10 | Bounded serial transaction |
-| `open_position_rev`, `close_position_rev` | -0.1597, +0.132523 | Confirmed open / operator-selected empty-jaw torque-stop reference |
+| `open_position_rev`, `close_position_rev` | See `config/gripper.yaml` | Latest auto-calibrated empty-jaw stall references for the installed fingertips |
+| `calibration_probe_margin_rev` | 0.25 | Guarded search distance beyond each saved endpoint, calibration only |
 | `reconnect_interval_s` | 1.0 | Read-only retry interval after absent/lost serial or motor feedback |
 | `max_speed_rps` | 1.0 | Output-shaft rev/s ceiling |
 | `max_acceleration_rps2` | 1.0 | Output-shaft rev/s² ceiling |
-| `open_torque_nm`, `close_torque_nm` | 3.07, 3.50 | Default direction limits |
-| `max_torque_nm` | 5.0 | Independent configurable command ceiling |
+| `open_torque_nm`, `close_torque_nm` | 3.07, 4.00 | Default direction limits for this fingertip fixture |
+| `max_torque_nm` | 4.0 | Independent configurable command ceiling |
 | `default_speed_scale`, `default_acceleration_scale` | 1.0, 1.0 | Defaults for omitted/zero request values |
 | `command_timeout_s`, `settle_time_s` | 12.0, 0.15 | Deadline and stable completion duration |
 | `position_tolerance_rev` | 0.002 | Arrival tolerance |
@@ -152,12 +167,13 @@ per-command scaling, effort, and timeouts are adjustable on every request.
 | `contact_ratio` | 0.95 | Sustained stationary torque / requested torque ratio |
 | `extended_telemetry` | true | Include float bus voltage and temperature |
 
-The open endpoint has operator confirmation. The closed reference is now the
-recorded empty-jaw stationary stop at +0.132523 rev, observed at 3.380 Nm with
-a 3.50 Nm limit. This replaces the unreachable +0.35 target and defines zero
-opening for this fixture. It is an operational reference, not a newly verified
-mechanical hard stop or millimetre calibration. All fractional commands now use
-this shorter span. No extra physical cycle was used to install this change.
+The saved endpoints were most recently auto-calibrated with the currently
+installed empty fingertips at the configured directional limits: 3.07 Nm while
+opening and 4.00 Nm while closing. Endpoint detection uses sustained stationary
+velocity after observed motion, not a torque threshold. They are repeatable stall references,
+not independently verified rigid mechanical hard stops or a millimetre
+calibration. Run the guarded calibration again after changing fingertips. All
+fractional commands use the latest saved encoder span.
 
 Closing stops on sustained torque **wherever it encounters resistance**.
 At the reference (within 0.002 rev) it reports `closed`; earlier resistance
