@@ -1,5 +1,6 @@
 """Single serial worker, immediate command acceptance, bounded completion."""
 import math
+import termios
 import threading
 import time
 import uuid
@@ -408,7 +409,11 @@ class Controller:
                         if self.phase in ('communication_error', 'connecting'):
                             self.phase = 'idle'
                 except Exception as exc:
-                    outcome = 'communication_error' if isinstance(exc, (OSError, ValueError)) else 'fault'
+                    # pyserial can expose a USB removal either as OSError /
+                    # SerialException or directly as termios.error. All are
+                    # transport loss, not a motor fault.
+                    outcome = ('communication_error'
+                               if isinstance(exc, (OSError, ValueError, termios.error)) else 'fault')
                     detail = str(exc)
                     # One bounded fresh hold attempt; never replay a failed command.
                     if self.active and self.active.sent_at:

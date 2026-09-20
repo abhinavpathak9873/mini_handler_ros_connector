@@ -16,17 +16,23 @@ boundaries. Out-of-span feedback remains visible and connected, and ordinary
 open/close targets bring the mechanism back toward the saved span. The bounded
 overtravel envelope remains enforced for calibration probes.
 
-The final AMD64 image passed 57 unit/protocol tests, ROS compilation, simulator
+The final AMD64 image passed 58 unit/protocol tests, ROS compilation, simulator
 integration, and absent-device integration, then auto-discovered the real
 adapter at `/host/dev/ttyACM1`. Read-only hardware feedback reported
 `connected=true`, `ready=true`, motor fault 0, and no movement was commanded.
 The same final source completed the full build and test sequence independently
 for `linux/amd64` and `linux/arm64`. The resulting OCI index contains both
 platform manifests; its archive SHA-256 is
-`40b257e3ec306d9d45503e8b20b8ad583c541524a0e78212e19a6fb4ecaf0a06`.
-Actual unplug/replug still requires a physical hotplug test on the deployment
-host; resolver, absent-start, idle reconnect, and interrupted-command behavior
-are covered automatically.
+`0d32479c8c67ad034ebf0ddfe7a6b0dff1637a484893d6b28c87a9231a567544`.
+Actual automatic replug recovery still requires the adapter to be physically
+reattached; resolver, absent-start, idle reconnect, and interrupted-command
+behavior are covered automatically.
+
+A subsequent real idle unplug produced Linux `termios.error(5, 'Input/output
+error')`, distinct from `OSError` in Python's type hierarchy. The transport
+classifier now explicitly treats both forms as communication loss, and a
+regression test ensures this real removal signature cannot be mislabeled as a
+motor fault or latch idle reconnection.
 
 ## Linux ARM64 / Jetson container validation — 2026-09-20
 

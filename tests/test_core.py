@@ -1,4 +1,5 @@
 import math
+import termios
 import time
 from dataclasses import replace
 import pytest
@@ -306,6 +307,23 @@ def test_reconnect_preserves_failed_result_and_never_replays():
         wait_for(lambda: d.connected)
         assert d.fault_latched and len(m.commands) == count
         assert d.get_result(ident)[2]['outcome'] == 'communication_error'
+    finally:
+        d.close()
+
+
+def test_idle_termios_error_is_disconnect_not_motor_fault():
+    c = Config(poll_hz=100.)
+    m = SimulatedMotor(c)
+    d = Controller(c, m)
+    try:
+        wait_for(lambda: d.connected)
+        def removed(command=b''):
+            raise termios.error(5, 'Input/output error')
+        m.exchange = removed
+        wait_for(lambda: d.phase == 'communication_error')
+        assert not d.connected
+        assert not d.fault_latched
+        assert 'Input/output error' in d.error
     finally:
         d.close()
 
